@@ -5,6 +5,7 @@ use std::{
 };
 use tokio::io::unix::AsyncFd;
 
+#[derive(Debug)]
 pub struct HighResultionTimer {
     timer_fd: tokio::io::unix::AsyncFd<std::os::fd::OwnedFd>,
 }
