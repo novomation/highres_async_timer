@@ -1,6 +1,8 @@
 use libc::{CLOCK_MONOTONIC, itimerspec, timerfd_create, timerfd_settime};
 use std::{
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    pin::Pin,
+    task::{Context, Poll, ready},
     time::Duration,
 };
 use tokio::io::unix::AsyncFd;
@@ -10,6 +12,7 @@ pub struct HighResultionTimer {
     timer_fd: tokio::io::unix::AsyncFd<std::os::fd::OwnedFd>,
 }
 impl HighResultionTimer {
+    /// This timer allows you to wait on a sequence of instants with a certain duration between each instant.
     pub fn interval(dur: Duration) -> Result<Self, std::io::Error> {
         let timer_fd = unsafe { timerfd_create(CLOCK_MONOTONIC, libc::TFD_CLOEXEC) };
         if timer_fd == -1 {
@@ -51,6 +54,7 @@ impl HighResultionTimer {
         }
         Ok(())
     }
+    /// Completes when the next instant in the interval has been reached.
     pub async fn tick(&self) {
         if let Ok(guard) = self.timer_fd.readable().await {
             let mut buf = [0u8; 8];
@@ -63,6 +67,34 @@ impl HighResultionTimer {
                 )
             };
         }
+    }
+    /// Polls for the next instant in the interval to be reached.
+    /// This method can return the following values:
+    /// * [Poll::Pending] if the next instant has not yet been reached.
+    /// * [Poll::Ready()] if the next instant has been reached.
+    pub fn poll_tick(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        // Poll AsyncFd for readiness.
+        let guard = match self.timer_fd.poll_read_ready(cx) {
+            Poll::Ready(t) => t,
+            Poll::Pending => return Poll::Pending,
+        };
+        let Ok(mut guard) = guard else {
+            return Poll::Ready(());
+        };
+
+        let mut buf = [0u8; 8];
+        let _ = unsafe {
+            use std::ffi::c_void;
+            libc::read(
+                guard.get_inner().as_raw_fd(),
+                &raw mut buf as *mut c_void,
+                buf.len(),
+            )
+        };
+
+        // Clear the readiness so we don't immediately wake again.
+        guard.clear_ready();
+        Poll::Ready(())
     }
 }
 
